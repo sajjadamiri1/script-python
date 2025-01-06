@@ -1,0 +1,128 @@
+﻿import numpy as np
+import pandas as pd
+import zipfile
+import os
+import time
+import shutil
+import requests
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
+
+# Define the list of crypto ticker symbols
+crypto_symbols = (
+    'BTC-USD ETH-USD USDT-USD BNB-USD SOL-USD STETH-USD IO29835-USD SAFE21585-USD PIXEL29335-USD '
+    'USDC-USD XRP-USD KSM-USD JST-USD RSS3-USD PEPECOIN-USD VBTC-USD DOGE-USD SHIB-USD ADA-USD '
+    'TON11419-USD AVAX-USD WSTETH-USD WETH-USD LINK-USD WBTC-USD DOT-USD WTRX-USD TRX-USD BCH-USD '
+    'NEAR-USD MATIC-USD UNI7083-USD LTC-USD PEPE24478-USD EETH-USD ICP-USD LEO-USD CBETH-USD '
+    'DAI-USD WEETH-USD ETC-USD RNDR-USD APT21794-USD EZETH-USD BTCB-USD WHBAR-USD WIF-USD HBAR-USD '
+    'WBETH-USD ATOM-USD ARB11841-USD IMX10603-USD MNT27075-USD KAS-USD FIL-USD CRO-USD XLM-USD '
+    'FDUSD-USD GRT6719-USD USDE29470-USD STX4847-USD OKB-USD OP-USD TAO22974-USD XMR-USD AR-USD '
+    'FLOKI-USD VET-USD MKR-USD INJ-USD BONK-USD SUI20947-USD FTM-USD THETA-USD RUNE-USD RETH-USD '
+    'LDO-USD TIA22861-USD FET-USD BGB-USD CORE23254-USD JITOSOL-USD METH29035-USD ONDO-USD ALGO-USD '
+    'PYTH-USD JUP29210-USD AAVE-USD SEI-USD ZBU-USD STRK22691-USD CHZ-USD FLOW-USD GALA-USD BEAM28298-USD '
+    'ENA-USD JASMY-USD AKT-USD BSV-USD VBNB-USD AGIX-USD BTT-USD RSETH-USD SUSDE-USD AXS-USD DYDX-USD '
+    'FLR-USD WLD-USD QNT-USD CHEEL-USD NOT-USD EGLD-USD NEO-USD W-USD SAND-USD RON14101-USD KCS-USD '
+    'BOME-USD PENDLE-USD WBNB-USD SNX-USD XEC-USD MINA-USD XTZ-USD MSOL-USD EOS-USD BRETT29743-USD '
+    'CFX-USD GNO-USD MANA-USD ORDI-USD AIOZ-USD NEXO-USD APE18876-USD ENS-USD CAKE-USD AEVO-USD '
+    'GT-USD IOTA-USD USDD-USD KAVA-USD KLAY-USD DEXE-USD CKB-USD AXL17799-USD DOG30933-USD BLUR-USD '
+    'LPT-USD SWETH-USD FTN-USD LUNC-USD FRAX-USD 1000SATS-USD HNT-USD TFUEL-USD WOO-USD PRIME23711-USD '
+    'SFRXETH-USD ROSE-USD TRUMP27872-USD BTG-USD CRV-USD OSMO-USD XAUT-USD 1INCH-USD MEME28301-USD '
+    'MOG-USD AERO29270-USD ETHFI-USD OM-USD ENJ-USD OCEAN-USD FTT-USD GLM-USD XDC-USD COMP5692-USD '
+    'IOTX-USD TUSD-USD ASTR-USD ETHDYDX-USD ARKM-USD TWT-USD ETHX-USD RSWETH-USD WEMIX-USD POPCAT28782-USD '
+    'RBN-USD SUPER8290-USD GMT18069-USD TURBO-USD RAY-USD JTO-USD LUNA20314-USD NFT9816-USD RPL-USD '
+    'GAL11877-USD CELO-USD ZRX-USD SKL-USD ZIL-USD SSV-USD MANTA-USD DYM-USD ZEC-USD ANKR-USD MX-USD '
+    'HOT2682-USD PAXG-USD METIS-USD USDB29599-USD MEW30126-USD ANT-USD XRD-USD WPLS-USD RSR-USD SC-USD '
+    'RVN-USD IPV28367-USD PEOPLE-USD ABT-USD BICO-USD PYUSD-USD ID21846-USD INF12760-USD ORBR-USD '
+    'BSOL-USD INF-USD QTUM-USD SFP-USD ETHW-USD BETH-USD LRC-USD ELF-USD ILV-USD FXS-USD ALT29073-USD '
+    'BNX23635-USD POLYX-USD ZETA-USD BAT-USD YGG-USD CSPR-USD DASH-USD T-USD CFG-USD TRAC-USD FLUX-USD '
+    'XEM-USD MASK8536-USD GAS-USD XCH-USD ERC20-USD HIGH-USD LSETH-USD GMX11857-USD DCR-USD ONE3945-USD '
+    'SUSHI-USD'
+)
+
+# Define the time period and interval
+time_frame = '1d'
+end_date = datetime.today()
+start_date = end_date - timedelta(days=5*365)  # Approximate 5 years
+
+# Define a dictionary to map categories to their ticker lists
+categories = {
+    'cryptos': crypto_symbols.split(' ')
+}
+
+# Create a temporary directory for storing data
+temp_dir = 'temp_data'
+os.makedirs(temp_dir, exist_ok=True)
+
+# Function to download and save data
+def download_and_save_data(ticker, category):
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        # Create the URL for the download request
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=5y&interval={time_frame}&includePrePost=false"
+
+        # Send a GET request to download data
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()  # Raise an error for bad responses
+
+        data = response.json()
+        if 'chart' not in data or 'result' not in data['chart']:
+            print(f"No data available for {ticker}")
+            return
+        
+        # Extract the data
+        result = data['chart']['result'][0]
+        df = pd.DataFrame(result['indicators']['quote'][0])
+        df['timestamp'] = pd.to_datetime(result['timestamp'], unit='s')
+        df.set_index('timestamp', inplace=True)
+
+        # Handle adjusted close
+        if 'adjclose' in result['indicators']:
+            df['adjclose'] = result['indicators']['adjclose'][0]['adjclose']
+        else:
+            df['adjclose'] = df['close']  # Default to close if adjclose is missing
+
+        # Arrange columns in the required format
+        df = df[['open', 'high', 'low', 'close', 'adjclose', 'volume']]
+        df.columns = ['<Open>', '<High>', '<Low>', '<Close>', '<Adj Close>', '<Volume>']
+
+        # Format the index to match the required format
+        df.index = df.index.strftime('%Y%m%d')
+        df.index.name = '<Date>'
+        
+        # Define the category folder path within the temp directory
+        category_path = os.path.join(temp_dir, category)
+        os.makedirs(category_path, exist_ok=True)
+        
+        # Save data as CSV
+        csv_file_name = os.path.join(category_path, ticker + '.csv')
+        df.to_csv(csv_file_name)
+
+        print(f"Saved data for {ticker} in {category} folder.")
+
+    except Exception as e:
+        with open('error_log.txt', 'a') as log_file:
+            log_file.write(f"Failed to process {ticker}: {e}\n")
+
+# Download and save data for each ticker in each category
+def process_tickers(category, tickers):
+    with ThreadPoolExecutor() as executor:
+        executor.map(lambda ticker: download_and_save_data(ticker, category), tickers)
+
+for category, tickers in categories.items():
+    process_tickers(category, tickers)
+
+# Name of the zip file
+zip_file_name = 'market_data.zip'
+
+# Compress the temporary directory into a zip file
+with zipfile.ZipFile(zip_file_name, 'w') as zipf:
+    for root, _, files in os.walk(temp_dir):
+        for file in files:
+            file_path = os.path.join(root, file)
+            zipf.write(file_path, os.path.relpath(file_path, temp_dir))
+            print(f"Added {file_path} to zip file.")
+
+# Remove the temporary directory and its contents
+shutil.rmtree(temp_dir)
+
+print(f"Data has been zipped into {zip_file_name}. Temporary files have been deleted.")

@@ -1,0 +1,72 @@
+import finpy_tse as fpy
+import pandas as pd
+import zipfile
+import os
+import logging
+from tqdm import tqdm
+
+# Configure logging
+logging.basicConfig(filename='stock_prices.log', level=logging.ERROR,
+                    format='%(asctime)s:%(levelname)s:%(message)s')
+
+def convert_persian_chars(ticker):
+    """Convert Persian characters ی and ک to Arabic characters ي and ك."""
+    return ticker.replace('ی', 'ي').replace('ک', 'ك')
+
+# Fetch stock list from TSE
+df = fpy.Build_Market_StockList(
+    bourse=True,
+    farabourse=True,
+    payeh=True,
+    detailed_list=False,
+    show_progress=False,
+)
+
+df = df.index.to_list()
+zip_filename = "stock_prices.zip"
+sels = []
+errors = []  # List to store errors for later display
+
+# Create a zip file to store the stock prices
+with zipfile.ZipFile(zip_filename, 'w') as zip_file:
+    for i in tqdm(range(min(len(df), 764)), desc="Processing stocks"):
+        try:
+            # Fetch price history for each stock
+            stock = fpy.Get_Price_History(
+                stock=df[i],
+                start_date='1395-01-01',
+                end_date='1403-08-16',
+                adjust_price=True,
+                double_date=True
+            )
+            
+            # Select relevant columns and format the date
+            stock = stock[['Date', 'Ticker', 'Adj Open', 'Adj High', 'Adj Low', 'Adj Close', 'Volume']]
+            stock['Date'] = pd.to_datetime(stock['Date']).dt.strftime('%Y%m%d')
+            stock.columns = ['<Date>', '<Ticker>', '<Adj Open>', '<Adj High>', '<Adj Low>', '<Adj Close>', '<Volume>']
+
+            # Replace specific characters in ticker names
+            stock['<Ticker>'] = stock['<Ticker>'].apply(convert_persian_chars)
+            
+            # Create a CSV filename with modified ticker name
+            csv_filename = f"{convert_persian_chars(df[i])}.csv"
+            stock.to_csv(csv_filename, index=False, encoding='windows-1256')
+            
+            # Add the CSV file to the zip archive
+            zip_file.write(csv_filename)
+            sels.append(df[i])
+            
+            # Remove the temporary CSV file
+            os.remove(csv_filename)
+            
+        except Exception as e:
+            errors.append(f"Error occurred while processing {df[i]}: {e}")
+            logging.error(f"Error occurred while processing {df[i]}: {e}")
+
+# Display any errors after processing all stocks
+if errors:
+    print("Errors occurred during processing:")
+    for error in errors:
+        print(error)
+else:
+    print(f"All stock prices are saved in {zip_filename}")
