@@ -1,0 +1,98 @@
+﻿class CapitalManagement:
+    def __init__(self, capital, risk_percentage, entry_price, commission, stop_loss):
+        self.capital = capital
+        self.risk_percentage = risk_percentage
+        self.entry_price = entry_price
+        self.commission = commission
+        self.stop_loss = stop_loss
+
+    def calculate_risk_amount(self):
+        """محاسبه مقدار ریسک"""
+        return self.capital * self.risk_percentage
+
+    def calculate_final_entry_price(self):
+        """محاسبه قیمت ورود نهایی"""
+        return self.entry_price * (1 + self.commission)
+
+    def calculate_loss_per_share(self):
+        """محاسبه میزان ضرر در هر سهم"""
+        return self.calculate_final_entry_price() - self.stop_loss
+
+    def calculate_loss_percentage(self):
+        """محاسبه درصد ضرر"""
+        loss_per_share = self.calculate_loss_per_share()
+        final_entry_price = self.calculate_final_entry_price()
+        return (loss_per_share / final_entry_price) * 100
+
+    def calculate_stop_loss_percentage(self):
+        """محاسبه درصد حد ضرر بدون کسر کارمزد"""
+        return ((self.entry_price - self.stop_loss) / self.entry_price) * 100
+
+    def calculate_number_of_shares(self):
+        """محاسبه تعداد سهم برای خرید"""
+        risk_amount = self.calculate_risk_amount()
+        loss_per_share = self.calculate_loss_per_share()
+        return risk_amount / loss_per_share
+
+    def calculate_purchase_amount(self):
+        """محاسبه میزان خرید"""
+        number_of_shares = self.calculate_number_of_shares()
+        final_entry_price = self.calculate_final_entry_price()
+        return number_of_shares * final_entry_price
+
+    def calculate_first_step_purchase(self, first_step_commission):
+        """محاسبه مقدار خرید در پله اول"""
+        purchase_amount = self.calculate_purchase_amount()
+        first_step_entry_price = self.entry_price * (1 + first_step_commission)
+        first_step_purchase_amount = purchase_amount / 6
+        first_step_number_of_shares = first_step_purchase_amount / self.calculate_final_entry_price()
+        first_step_loss = first_step_purchase_amount - (first_step_number_of_shares * (self.stop_loss * (1 - 0.0088)))
+        return {
+            "first_step_entry_price": first_step_entry_price,
+            "first_step_purchase_amount": first_step_purchase_amount,
+            "first_step_number_of_shares": first_step_number_of_shares,
+            "first_step_loss": first_step_loss
+        }
+
+    def calculate_second_step_purchase(self):
+        """محاسبه مقدار خرید در پله دوم"""
+        purchase_amount = self.calculate_purchase_amount()
+        return purchase_amount / 3
+
+    def calculate_third_step_purchase(self):
+        """محاسبه مقدار خرید در پله سوم"""
+        purchase_amount = self.calculate_purchase_amount()
+        return purchase_amount / 2
+
+    def display_results(self, first_step_commission):
+        """نمایش نتایج"""
+        risk_amount = self.calculate_risk_amount()
+        final_entry_price = self.calculate_final_entry_price()
+        loss_per_share = self.calculate_loss_per_share()
+        loss_percentage = self.calculate_loss_percentage()
+        stop_loss_percentage = self.calculate_stop_loss_percentage()
+        number_of_shares = self.calculate_number_of_shares()
+        purchase_amount = self.calculate_purchase_amount()
+        first_step_results = self.calculate_first_step_purchase(first_step_commission)
+        second_step_purchase_amount = self.calculate_second_step_purchase()
+        third_step_purchase_amount = self.calculate_third_step_purchase()
+
+        print(f"میزان خرید: {purchase_amount:,.0f} تومان")
+        print(f"میزان درصد حد ضرر با کارمزد: {loss_percentage:.2f} %")
+        print(f"مقدار خرید در پله اول: {first_step_results['first_step_purchase_amount']:,.0f} تومان")
+        print(f"مقدار ضرر در پله اول: {first_step_results['first_step_loss']:,.0f} تومان")
+        print(f"مقدار خرید در پله دوم: {second_step_purchase_amount:,.0f} تومان")
+        print(f"مقدار خرید در پله سوم: {third_step_purchase_amount:,.0f} تومان")
+
+
+# استفاده از کلاس
+capital_management = CapitalManagement(
+    capital=200000000,      # مقدار کل سرمایه به میلیون تومان
+    risk_percentage=0.02,   # درصد ریسک روی کل سرمایه 2 درصد
+    entry_price=1000,       # قیمت خرید سهم به تومان
+    commission=0.0126,      # کارمزد خرید و فروش سهم 1.26 درصد
+    stop_loss=850           # قیمت حد ضرر سهم به تومان
+)
+
+# نمایش نتایج
+capital_management.display_results(first_step_commission=0.003712)
