@@ -1,0 +1,85 @@
+﻿const URL_PATH_REGEX = /^\/bot(?<bot_token>[^/]+)\/(?<api_method>[a-z]+)/i;
+const CONTENT_TYPE_JSON = 'application/json';
+const HEADERS = { 'content-type': CONTENT_TYPE_JSON };
+
+async function getCachedResponse(cacheKey) {
+    const cache = caches.default;
+    return await cache.match(cacheKey);
+}
+
+async function setCachedResponse(cacheKey, response) {
+    const cache = caches.default;
+    await cache.put(cacheKey, response.clone());
+}
+
+async function handleTelegramRequest(request) {
+    try {
+        const url = new URL(request.url);
+        url.hostname = 'api.telegram.org';
+
+        const cacheKey = new Request(url.toString(), request);
+        const cachedResponse = await getCachedResponse(cacheKey);
+
+        if (cachedResponse) {
+            console.log('پاسخ از کش بازیابی شد.');
+            return cachedResponse;
+        }
+
+        const newRequest = new Request(url.toString(), {
+            method: request.method,
+            headers: request.headers,
+            body: request.body,
+        });
+
+        const response = await fetch(newRequest);
+
+        if (response.ok) {
+            console.log('پاسخ جدید دریافت و در کش ذخیره شد.');
+            await setCachedResponse(cacheKey, response);
+        }
+
+        return response;
+    } catch (error) {
+        console.error('خطا در واکشی داده:', error.message);
+        return new Response(JSON.stringify({ ok: false, error: 'خطای سرور داخلی' }), {
+            status: 500,
+            headers: HEADERS,
+        });
+    }
+}
+
+function handleRootRequest() {
+    const result = 'همه چیز درسته فقط به جای api تلگرام آدرس ورکر رو بزار و تمام.';
+    return new Response(JSON.stringify({ ok: true, result }), {
+        status: 200,
+        headers: HEADERS,
+    });
+}
+
+function handle404Request() {
+    const description = 'این مسیر غلطه یه سر به داکیومنت های تلگرام بزن';
+    const error_code = 404;
+    return new Response(JSON.stringify({ ok: false, error_code, description }), {
+        status: error_code,
+        headers: HEADERS,
+    });
+}
+
+async function handleRequest(request) {
+    const { pathname } = new URL(request.url);
+    console.log(`درخواست دریافت شده برای مسیر: ${pathname}`);
+
+    switch (pathname) {
+        case '/':
+            return handleRootRequest();
+        default:
+            if (URL_PATH_REGEX.test(pathname)) {
+                return await handleTelegramRequest(request);
+            }
+            return handle404Request();
+    }
+}
+
+addEventListener('fetch', (event) => {
+    event.respondWith(handleRequest(event.request));
+});
