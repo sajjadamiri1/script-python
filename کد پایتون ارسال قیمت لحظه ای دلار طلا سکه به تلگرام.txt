@@ -1,0 +1,239 @@
+﻿# نصب همه پکیج‌های مورد نیاز
+!pip install requests-html
+!pip install pyppeteer
+!pip install beautifulsoup4
+!pip install lxml_html_clean
+!pip install websockets
+!pip install nest_asyncio
+
+import sys
+import time
+import io
+import asyncio
+from typing import Optional, Dict
+from requests_html import AsyncHTMLSession
+from IPython.display import clear_output
+
+# برای سازگاری با گوگل کولب
+import nest_asyncio
+nest_asyncio.apply()
+
+CONFIG = {
+    "URL": "https://www.tgju.org",
+    "UPDATE_INTERVAL": 15,  # هر ۱۵ ثانیه
+    "ENCODING": "utf-8",
+    "TELEGRAM_TOKEN": "YOUR_BOT_TOKEN",  # توکن تلگرام
+    "TELEGRAM_CHAT_ID": "YOUR_CHAT_ID",  # آیدی چت تلگرام
+    "HEADERS": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Referer": "https://www.google.com/",
+        "Cache-Control": "no-cache",  # جلوگیری از کش
+        "Pragma": "no-cache"  # جلوگیری از کش
+    }
+}
+
+previous_prices: Dict[str, Optional[float]] = {
+    "gold_18k": None, "gold_24k": None, "emami_coin": None, "bahar_azadi_coin": None,
+    "half_coin": None, "quarter_coin": None, "gold_ounce": None, "dollar": None,
+    "tether": None, "emami_coin_bubble": None, "bahar_azadi_coin_bubble": None,
+    "half_coin_bubble": None, "quarter_coin_bubble": None
+}
+
+
+class PriceFetcher:
+    @staticmethod
+    async def fetch_page_content(url: str, headers: Dict[str, str]) -> Optional[str]:
+        session = AsyncHTMLSession()
+        try:
+            print("در حال ارسال درخواست جدید به سایت...")
+            response = await session.get(url, headers=headers, timeout=10)
+            print("در حال رندر کردن صفحه...")
+            # رندر با زمان خواب بیشتر و بدون کش
+            await response.html.arender(timeout=20, sleep=5, keep_page=True)
+            print("وضعیت درخواست: موفقیت (کد وضعیت:", response.status_code, ")")
+            return response.html.html
+        except Exception as e:
+            print(f"خطا در دریافت اطلاعات: {e}")
+            return None
+        finally:
+            await session.close()
+
+    @staticmethod
+    def get_price_by_name(html: str, item_name: str) -> str:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, 'html.parser')
+        tag = soup.find('th', string=item_name)
+        result = tag.find_next_sibling('td').text.strip() if tag else "N/A"
+        print(f"قیمت {item_name}: {result}")
+        return result
+
+    @staticmethod
+    def get_price_by_class(html: str, class_name: str) -> str:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, 'html.parser')
+        tag = soup.find('td', class_=class_name)
+        result = tag.text.strip() if tag else "N/A"
+        print(f"قیمت با کلاس {class_name}: {result}")
+        return result
+
+    @staticmethod
+    def parse_price(price_text: str) -> Optional[float]:
+        try:
+            return float(price_text.replace(',', '')) / 10
+        except ValueError:
+            return None
+
+    @staticmethod
+    def get_text(item_name: str, current_price: Optional[float], for_telegram: bool = False) -> str:
+        global previous_prices
+        previous_price = previous_prices[item_name]
+        previous_prices[item_name] = current_price
+
+        if current_price is None:
+            return "N/A"
+
+        if current_price.is_integer():
+            formatted_price = f"{int(current_price):,}"
+        else:
+            formatted_price = f"{current_price:,.2f}"
+
+        if for_telegram:
+            if previous_price is None:
+                return f"{formatted_price}"
+            elif current_price > previous_price:
+                return f"{formatted_price} ↑"
+            elif current_price < previous_price:
+                return f"{formatted_price} ↓"
+            else:
+                return f"{formatted_price}"
+        else:
+            return formatted_price
+
+    @staticmethod
+    async def send_to_telegram(post: str) -> None:
+        session = AsyncHTMLSession()
+        token_tel = CONFIG["TELEGRAM_TOKEN"]
+        id_tel = CONFIG["TELEGRAM_CHAT_ID"]
+        url_tel = f"https://api.telegram.org/bot{token_tel}/sendMessage?text={str(post)}&chat_id={id_tel}&parse_mode=html"
+        try:
+            print("در حال ارسال پیام به تلگرام...")
+            response = await session.get(url_tel)
+            print("وضعیت پاسخ تلگرام:", response.status_code)
+            if response.status_code == 200:
+                print("پیام با موفقیت به تلگرام ارسال شد.")
+            else:
+                print(f"خطا در تلگرام: کد وضعیت {response.status_code}")
+        except Exception as e:
+            print(f"خطا در ارسال به تلگرام: {e}")
+        finally:
+            await session.close()
+
+
+async def display_prices(message_count: int, max_messages: int) -> None:
+    print(f"شروع تابع display_prices برای پیام {message_count}...")
+    fetcher = PriceFetcher()
+    html_content = await fetcher.fetch_page_content(CONFIG["URL"], CONFIG["HEADERS"])
+
+    if not html_content:
+        print("داده‌ای دریافت نشد، ادامه پردازش متوقف شد.")
+        return
+
+    gold_18k_price = fetcher.parse_price(fetcher.get_price_by_name(html_content, 'طلای 18 عیار'))
+    gold_24k_price = fetcher.parse_price(fetcher.get_price_by_name(html_content, 'طلای 24 عیار'))
+    emami_coin_price = fetcher.parse_price(fetcher.get_price_by_name(html_content, 'سکه امامی'))
+    bahar_azadi_coin_price = fetcher.parse_price(fetcher.get_price_by_name(html_content, 'سکه بهار آزادی'))
+    half_coin_price = fetcher.parse_price(fetcher.get_price_by_name(html_content, 'نیم سکه'))
+    quarter_coin_price = fetcher.parse_price(fetcher.get_price_by_name(html_content, 'ربع سکه'))
+    gold_ounce_price = fetcher.parse_price(fetcher.get_price_by_name(html_content, 'انس طلا'))
+    dollar_price = fetcher.parse_price(fetcher.get_price_by_class(html_content, 'market-price'))
+    tether_price = fetcher.parse_price(fetcher.get_price_by_name(html_content, 'تتر'))
+    emami_coin_bubble = fetcher.parse_price(fetcher.get_price_by_name(html_content, 'حباب سکه امامی'))
+    bahar_azadi_coin_bubble = fetcher.parse_price(fetcher.get_price_by_name(html_content, 'حباب سکه بهار آزادی'))
+    half_coin_bubble = fetcher.parse_price(fetcher.get_price_by_name(html_content, 'حباب نیم سکه'))
+    quarter_coin_bubble = fetcher.parse_price(fetcher.get_price_by_name(html_content, 'حباب ربع سکه'))
+
+    current_time = time.strftime('%Y-%m-%d %H:%M:%S')
+
+    console_output = [
+        "╔═════════════════════ قیمت‌های بازار ═════════════════════╗",
+        f"║ زمان به‌روزرسانی: {current_time:<36} ║",
+        "╠══════════════════════════════════════════════════════════╣",
+        f"║ دلار:         {fetcher.get_text('dollar', dollar_price):>38} ║",
+        f"║ تتر:          {fetcher.get_text('tether', tether_price):>38} ║",
+        f"║ طلای 18 عیار: {fetcher.get_text('gold_18k', gold_18k_price):>38} ║",
+        f"║ طلای 24 عیار: {fetcher.get_text('gold_24k', gold_24k_price):>38} ║",
+        f"║ سکه امامی:   {fetcher.get_text('emami_coin', emami_coin_price):>38} ║",
+        f"║ سکه بهار آزادی: {fetcher.get_text('bahar_azadi_coin', bahar_azadi_coin_price):>38} ║",
+        f"║ نیم سکه:     {fetcher.get_text('half_coin', half_coin_price):>38} ║",
+        f"║ ربع سکه:     {fetcher.get_text('quarter_coin', quarter_coin_price):>38} ║",
+        f"║ انس طلا:     {fetcher.get_text('gold_ounce', gold_ounce_price):>38} ║",
+        f"║ حباب سکه امامی: {fetcher.get_text('emami_coin_bubble', emami_coin_bubble):>38} ║",
+        f"║ حباب سکه بهار آزادی: {fetcher.get_text('bahar_azadi_coin_bubble', bahar_azadi_coin_bubble):>38} ║",
+        f"║ حباب نیم سکه: {fetcher.get_text('half_coin_bubble', half_coin_bubble):>38} ║",
+        f"║ حباب ربع سکه: {fetcher.get_text('quarter_coin_bubble', quarter_coin_bubble):>38} ║",
+        "╚══════════════════════════════════════════════════════════╝"
+    ]
+
+    clear_output(wait=True)
+    print('\n'.join(console_output))
+    print(f"پیام {message_count} از {max_messages} آماده شد")
+
+    telegram_message = (
+        "<pre>\n"
+        "┌────────────────────────────┐\n"
+        f"│  به‌روزرسانی: {current_time}  │\n"
+        "├────────────────────────────┤\n"
+        f"│ دلار:         {fetcher.get_text('dollar', dollar_price, for_telegram=True):>15} │\n"
+        f"│ تتر:          {fetcher.get_text('tether', tether_price, for_telegram=True):>15} │\n"
+        f"│ طلای 18 عیار: {fetcher.get_text('gold_18k', gold_18k_price, for_telegram=True):>15} │\n"
+        f"│ طلای 24 عیار: {fetcher.get_text('gold_24k', gold_24k_price, for_telegram=True):>15} │\n"
+        f"│ سکه امامی:   {fetcher.get_text('emami_coin', emami_coin_price, for_telegram=True):>15} │\n"
+        f"│ سکه بهار:    {fetcher.get_text('bahar_azadi_coin', bahar_azadi_coin_price, for_telegram=True):>15} │\n"
+        f"│ نیم سکه:     {fetcher.get_text('half_coin', half_coin_price, for_telegram=True):>15} │\n"
+        f"│ ربع سکه:     {fetcher.get_text('quarter_coin', quarter_coin_price, for_telegram=True):>15} │\n"
+        f"│ انس طلا:     {fetcher.get_text('gold_ounce', gold_ounce_price, for_telegram=True):>15} │\n"
+        f"│ حباب امامی:  {fetcher.get_text('emami_coin_bubble', emami_coin_bubble, for_telegram=True):>15} │\n"
+        f"│ حباب بهار:   {fetcher.get_text('bahar_azadi_coin_bubble', bahar_azadi_coin_bubble, for_telegram=True):>15} │\n"
+        f"│ حباب نیم:    {fetcher.get_text('half_coin_bubble', half_coin_bubble, for_telegram=True):>15} │\n"
+        f"│ حباب ربع:    {fetcher.get_text('quarter_coin_bubble', quarter_coin_bubble, for_telegram=True):>15} │\n"
+        "└────────────────────────────┘\n"
+        "</pre>"
+    )
+
+    await fetcher.send_to_telegram(telegram_message)
+    print(f"پیام {message_count} از {max_messages} با موفقیت پردازش شد")
+
+
+async def main_loop():
+    if sys.stdout.encoding != CONFIG["ENCODING"] and hasattr(sys.stdout, 'buffer'):
+        try:
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding=CONFIG["ENCODING"])
+        except AttributeError:
+            print("هشدار: نمی‌توان انکودینگ را تغییر داد")
+
+    print("در حال انتظار برای به‌روزرسانی اولیه (۵ ثانیه)...")
+    await asyncio.sleep(5)
+
+    message_count = 0
+    max_messages = 10
+
+    while message_count < max_messages:
+        message_count += 1
+        print(f"شروع پردازش پیام {message_count} از {max_messages}...")
+        await display_prices(message_count, max_messages)
+        if message_count < max_messages:
+            print(f"منتظر {CONFIG['UPDATE_INTERVAL']} ثانیه برای پیام بعدی...")
+            await asyncio.sleep(CONFIG["UPDATE_INTERVAL"])
+        else:
+            print("آخرین پیام ارسال شد.")
+
+    print("۱۰ پیام ارسال شد. برنامه متوقف شد.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main_loop())
