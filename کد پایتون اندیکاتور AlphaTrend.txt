@@ -1,0 +1,254 @@
+﻿import pandas as pd
+import pandas_ta as ta
+import mplfinance as mpf
+import numpy as np
+import finpy_tse as fpy
+import jdatetime
+import datetime
+import matplotlib.ticker as ticker
+import matplotlib.dates as mdates
+from IPython.core.interactiveshell import InteractiveShell
+
+InteractiveShell.ast_node_interactivity = "last_expr"
+
+CONFIG = {
+    'stock_symbol': 'خودرو',
+    'days_back': 200,
+    'buffer_days': 0,
+    'atr_period': 14,
+    'rsi_period': 14,
+    'mfi_period': 14,
+    'coeff': 1.0,
+    'chart_figsize': (20, 10),
+    'price_step': 200,
+    'indicator': 'mfi'
+}
+
+if CONFIG['indicator'] not in ['rsi', 'mfi']:
+    raise ValueError("پارامتر 'indicator' باید یکی از مقادیر 'rsi' یا 'mfi' باشد.")
+
+today = datetime.datetime.today()
+start_date = today - datetime.timedelta(days=CONFIG['days_back'] + CONFIG['buffer_days'])
+today_jalali = jdatetime.date.fromgregorian(date=today)
+start_date_jalali = jdatetime.date.fromgregorian(date=start_date)
+start_date_str = start_date_jalali.strftime('%Y-%m-%d')
+end_date_str = today_jalali.strftime('%Y-%m-%d')
+
+print(f"تاریخ شروع (شمسی): {start_date_str}")
+print(f"تاریخ پایان (شمسی): {end_date_str}")
+
+df = fpy.Get_Price_History(
+    stock=CONFIG['stock_symbol'],
+    start_date=start_date_str,
+    end_date=end_date_str,
+    ignore_date=False,
+    adjust_price=True,
+    show_weekday=False,
+    double_date=False
+)
+
+df = df[['Adj Open', 'Adj High', 'Adj Low', 'Adj Close', 'Volume']].copy()
+df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+
+print("\nچک کردن حجم معاملات:")
+print(f"تعداد کل ردیف‌ها قبل از فیلتر: {len(df)}")
+zero_volume_days = df[df['Volume'] == 0]
+print(f"تعداد روزهایی با حجم صفر: {len(zero_volume_days)}")
+if not zero_volume_days.empty:
+    print("روزهایی که حجم صفر دارند و حذف خواهند شد:")
+    print(zero_volume_days.index.map(lambda x: jdatetime.date.fromgregorian(date=x).strftime('%Y-%m-%d')))
+df = df[df['Volume'] > 0].copy()
+print(f"تعداد ردیف‌ها بعد از حذف روزهای با حجم صفر: {len(df)}")
+
+def jalali_to_gregorian(date_str):
+    year, month, day = map(int, date_str.split('-'))
+    jalali_date = jdatetime.date(year, month, day)
+    return jalali_date.togregorian()
+
+df.index = df.index.map(jalali_to_gregorian)
+df.index = pd.to_datetime(df.index)
+df.index.name = 'Date'
+
+if df.empty:
+    raise ValueError("دیتافریم بعد از فیلتر کردن خالی است! لطفاً داده‌ها یا بازه زمانی را چک کنید.")
+else:
+    print("\nدیتافریم نهایی:")
+    print(df.head())
+
+def calculate_alphatrend(df, atr_period, rsi_period, mfi_period, coeff, indicator):
+    Open = df['Open']
+    Close = df['Close']
+    High = df['High']
+    Low = df['Low']
+    Volume = df['Volume']
+    tr = ta.true_range(High, Low, Close)
+    atr = ta.sma(tr, atr_period)
+    coeff = coeff
+    upt = []
+    downT = []
+    AlphaTrend = [0.0]
+    src = Close
+    rsi = ta.rsi(src, rsi_period) if indicator == 'rsi' else None
+    mfi = ta.mfi(High, Low, Close, Volume, mfi_period) if indicator == 'mfi' else None
+    hlc3 = []
+    k1 = []
+    k2 = []
+
+    for i in range(len(Close)):
+        hlc3.append((High[i] + Low[i] + Close[i]) / 3)
+
+    for i in range(len(Low)):
+        if pd.isna(atr[i]):
+            upt.append(0)
+        else:
+            upt.append(Low[i] - (atr[i] * coeff))
+
+    for i in range(len(High)):
+        if pd.isna(atr[i]):
+            downT.append(0)
+        else:
+            downT.append(High[i] + (atr[i] * coeff))
+
+    for i in range(1, len(Close)):
+        indicator_value = rsi[i] if indicator == 'rsi' else mfi[i]
+        if indicator_value >= 50:
+            if upt[i] < AlphaTrend[i - 1]:
+                AlphaTrend.append(AlphaTrend[i - 1])
+            else:
+                AlphaTrend.append(upt[i])
+        else:
+            if downT[i] > AlphaTrend[i - 1]:
+                AlphaTrend.append(AlphaTrend[i - 1])
+            else:
+                AlphaTrend.append(downT[i])
+
+    for i in range(len(AlphaTrend)):
+        if i < 2:
+            k2.append(0)
+            k1.append(AlphaTrend[i])
+        else:
+            k2.append(AlphaTrend[i - 2])
+            k1.append(AlphaTrend[i])
+
+    df['k1'] = k1
+    df['k2'] = k2
+    df['k1'] = df['k1'].replace(0, np.nan)
+    df['k2'] = df['k2'].replace(0, np.nan)
+    return df
+
+alphatrend = calculate_alphatrend(
+    df,
+    CONFIG['atr_period'],
+    CONFIG['rsi_period'],
+    CONFIG['mfi_period'],
+    CONFIG['coeff'],
+    CONFIG['indicator']
+)
+
+first_valid_idx = alphatrend[['k1', 'k2']].dropna().index[0]
+df = df.loc[first_valid_idx:].copy()
+alphatrend = alphatrend.loc[first_valid_idx:].copy()
+
+if len(df) > CONFIG['days_back']:
+    df = df.tail(CONFIG['days_back']).copy()
+    alphatrend = alphatrend.tail(CONFIG['days_back']).copy()
+
+k1 = alphatrend['k1']
+k2 = alphatrend['k2']
+buy_signals = (k1 > k2) & (k1.shift(1) <= k2.shift(1))
+sell_signals = (k1 < k2) & (k1.shift(1) >= k2.shift(1))
+
+filtered_buy_signals = pd.Series(np.nan, index=alphatrend.index)
+filtered_sell_signals = pd.Series(np.nan, index=alphatrend.index)
+signals = []
+last_signal = None
+
+for i in range(len(alphatrend)):
+    if buy_signals.iloc[i] and last_signal != 'buy':
+        filtered_buy_signals.iloc[i] = alphatrend['Low'].iloc[i] * 0.85
+        last_signal = 'buy'
+        signals.append(('buy', alphatrend.index[i], alphatrend['Close'].iloc[i]))
+    elif sell_signals.iloc[i] and last_signal != 'sell':
+        filtered_sell_signals.iloc[i] = alphatrend['High'].iloc[i] * 1.15
+        last_signal = 'sell'
+        signals.append(('sell', alphatrend.index[i], alphatrend['Close'].iloc[i]))
+
+profits = []
+i = 0
+while i < len(signals) - 1:
+    if signals[i][0] == 'buy' and signals[i+1][0] == 'sell':
+        entry_date, entry_price = signals[i][1], signals[i][2]
+        exit_date, exit_price = signals[i+1][1], signals[i+1][2]
+        profit_loss = ((exit_price - entry_price) / entry_price) * 100
+        profits.append(profit_loss)
+        print(f"\nسیگنال خرید در تاریخ {entry_date.strftime('%Y-%m-%d')} - قیمت: {entry_price:,.0f}")
+        print(f"سیگنال فروش در تاریخ {exit_date.strftime('%Y-%m-%d')} - قیمت: {exit_price:,.0f} - سود/زیان: {profit_loss:.2f}%")
+        i += 2
+    else:
+        i += 1
+
+if len(df) == 0 or len(alphatrend) == 0:
+    print("داده کافی برای رسم چارت وجود ندارد!")
+else:
+    ic = [
+        mpf.make_addplot(alphatrend['k1'], color='#0022FC', width=3, label='k1'),
+        mpf.make_addplot(alphatrend['k2'], color='#FC0400', width=3, label='k2')
+    ]
+    if filtered_buy_signals.dropna().any():
+        ic.append(mpf.make_addplot(filtered_buy_signals, type='scatter', markersize=100, marker='^', color='blue', label='Buy Signal'))
+    if filtered_sell_signals.dropna().any():
+        ic.append(mpf.make_addplot(filtered_sell_signals, type='scatter', markersize=100, marker='v', color='red', label='Sell Signal'))
+
+    fill_up = dict(
+        y1=alphatrend['k1'].values,
+        y2=alphatrend['k2'].values,
+        where=alphatrend['k1'].values >= alphatrend['k2'].values,
+        color='#00E60F',
+        alpha=0.5
+    )
+    fill_down = dict(
+        y1=alphatrend['k1'].values,
+        y2=alphatrend['k2'].values,
+        where=alphatrend['k1'].values <= alphatrend['k2'].values,
+        color='#80000B',
+        alpha=0.5
+    )
+
+    fig, axlist = mpf.plot(
+        df,
+        type="candle",
+        style="yahoo",
+        addplot=ic,
+        fill_between=[fill_up, fill_down],
+        figsize=CONFIG['chart_figsize'],
+        yscale="log",
+        returnfig=True,
+        title=f"{CONFIG['stock_symbol']} AlphaTrend Analysis ({CONFIG['indicator'].upper()})"
+    )
+
+    ax = axlist[0]
+    ax.set_yscale('log')
+    price_min = df['Low'].min() * 0.8
+    price_max = df['High'].max() * 1.2
+    tick_values = np.arange(
+        np.floor(price_min / CONFIG['price_step']) * CONFIG['price_step'],
+        np.ceil(price_max / CONFIG['price_step']) * CONFIG['price_step'],
+        CONFIG['price_step']
+    )
+    ax.set_yticks(tick_values)
+    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f'{int(x):,}'))
+    ax.tick_params(axis='y', labelsize=10)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+    fig.autofmt_xdate()
+    ax.legend()
+
+    mpf.show()
+
+if profits:
+    total_pl = sum(profits)
+    avg_pl = np.mean(profits)
+    print(f"\nتعداد معاملات بسته‌شده: {len(profits)}")
+    print(f"مجموع سود/زیان: {total_pl:.2f}%")
+    print(f"میانگین سود/زیان هر معامله: {avg_pl:.2f}%")
+else:
+    print("\nهیچ معامله‌ای بسته نشده است.")
